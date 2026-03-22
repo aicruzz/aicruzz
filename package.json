@@ -1,0 +1,17 @@
+{
+  "name": "aicruzz",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AiCruzz — AI Video Creation SaaS Platform",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\" --names \"API,WEB\" --prefix-colors \"cyan,magenta\"",
+    "dev:web": "npm --prefix apps/web run dev",
+    "dev:api": "npm --prefix apps/api run dev",
+    "build:web": "npm --prefix apps/web run build",
+    "build:api": "npm --prefix apps/api run build",
+    "install:all": "npm install && npm --prefix apps/web install && npm --prefix apps/api install && npm --prefix packages/types install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

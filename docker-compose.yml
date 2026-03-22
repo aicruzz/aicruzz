@@ -1,0 +1,19 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: aicruzz_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: aicruzz
+    ports:
+      - '5432:5432'
+    volumes:
+      - aicruzz_pgdata:/var/lib/postgresql/data
+      - ./apps/api/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+
+volumes:
+  aicruzz_pgdata:

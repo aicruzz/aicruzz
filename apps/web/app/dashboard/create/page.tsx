@@ -53,13 +53,27 @@ export default function CreatePage() {
     }, 420);
 
     try {
-      const durationSec = parseInt(duration) || 10;
-      await videosApi.generate({ prompt, style: selectedStyle, duration: durationSec, resolution, aspect_ratio: ratio });
-      clearInterval(iv);
-      setProgress(100);
-      setProgressLabel('Done!');
-      setTimeout(() => setStatus('done'), 400);
-    } catch (err: unknown) {
+  const durationSec = parseInt(duration) || 10;
+
+  await videosApi.generate({
+    prompt,
+    style: selectedStyle,
+    duration: durationSec,
+    resolution,
+    aspect_ratio: ratio,
+  });
+
+  clearInterval(iv);
+
+  // Optional: small delay for UX smoothness
+  setProgress(100);
+  setProgressLabel('Done!');
+
+  setTimeout(() => {
+    window.location.href = '/dashboard/videos';
+  }, 500);
+
+} catch (err: unknown) {
       clearInterval(iv);
       setStatus('error');
       setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Generation failed. Please try again.');

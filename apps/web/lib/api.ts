@@ -77,7 +77,7 @@ export const videosApi = {
     return data;
   },
 
-  generate: async (payload: GenerateVideoPayload): Promise<{ video: Video; estimated_seconds: number }> => {
+  generate: async (payload: GenerateVideoPayload): Promise<Video> => {
     const { data } = await http.post('/api/v1/videos/generate', payload);
     return data;
   },

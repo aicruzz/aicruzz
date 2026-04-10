@@ -11,7 +11,7 @@ import { authMiddleware } from '../middleware/auth.middleware';
 const router = Router();
 
 // All video routes require authentication
-// router.use(authMiddleware);
+router.use(authMiddleware);
 
 router.get('/', listVideos);
 router.post('/generate', generateVideo);

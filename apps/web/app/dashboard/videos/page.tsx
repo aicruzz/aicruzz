@@ -2,108 +2,343 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import Badge from '@/components/ui/Badge';
 import { videosApi } from '@/lib/api';
+import { socket } from '@/lib/socket';
 import type { Video } from '@aicruzz/types';
-
-const statusVariant: Record<string, 'done' | 'proc' | 'queued' | 'failed'> = {
-  done: 'done', processing: 'proc', queued: 'queued', failed: 'failed',
-};
-const statusLabel: Record<string, string> = {
-  done: 'Completed', processing: 'Processing', queued: 'Queued', failed: 'Failed',
-};
-const gradients = [
-  'linear-gradient(135deg,#667eea,#764ba2)',
-  'linear-gradient(135deg,#f093fb,#f5576c)',
-  'linear-gradient(135deg,#4facfe,#00f2fe)',
-  'linear-gradient(135deg,#f7971e,#ffd200)',
-  'linear-gradient(135deg,#a8edea,#fed6e3)',
-];
 
 export default function VideosPage() {
   const [videos, setVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
+  const [modalVideo, setModalVideo] = useState<string | null>(null);
+  const [loadedThumbs, setLoadedThumbs] = useState<Record<string, boolean>>({});
+  const [progressMap, setProgressMap] = useState<Record<string, number>>({});
 
+  // ✅ INITIAL FETCH
   useEffect(() => {
-    videosApi.list()
-      .then((r) => setVideos(r.data))
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    async function fetchVideos() {
+      try {
+        const res = await videosApi.list();
+        setVideos(res.data);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchVideos();
+  }, []);
+
+  // ✅ SOCKET FIX (REAL SOLUTION)
+  useEffect(() => {
+    socket.on('video:update', (updatedVideo: Video) => {
+      setVideos((prev) => {
+        const exists = prev.find((v) => v.id === updatedVideo.id);
+
+        // ✅ UPDATE EXISTING VIDEO
+        if (exists) {
+          return prev.map((v) =>
+            v.id === updatedVideo.id
+              ? {
+                  ...v,
+                  ...updatedVideo,
+                  // 🔥 FORCE RE-RENDER WHEN URL ARRIVES
+                  url: updatedVideo.url ?? v.url,
+                  thumbnailUrl:
+                    updatedVideo.thumbnailUrl ?? v.thumbnailUrl,
+                }
+              : v
+          );
+        }
+
+        // ✅ ADD NEW VIDEO (NO BLANK BREAK)
+        return [
+          {
+            ...updatedVideo,
+            url: updatedVideo.url ?? null,
+            thumbnailUrl: updatedVideo.thumbnailUrl ?? null,
+          },
+          ...prev,
+        ];
+      });
+    });
+
+    socket.on('video:progress', ({ videoId, progress }) => {
+      setProgressMap((prev) => ({
+        ...prev,
+        [videoId]: progress,
+      }));
+    });
+
+    return () => {
+      socket.off('video:update');
+      socket.off('video:progress');
+    };
   }, []);
 
   async function handleDelete(id: string) {
     if (!confirm('Delete this video?')) return;
-    await videosApi.delete(id);
-    setVideos((v) => v.filter((vid) => vid.id !== id));
+
+    try {
+      await videosApi.delete(id);
+      setVideos((prev) => prev.filter((v) => v.id !== id));
+
+      if (activeVideoId === id) setActiveVideoId(null);
+    } catch (err) {
+      console.error('Delete failed', err);
+    }
   }
 
   return (
     <div className="db-content">
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24, flexWrap: 'wrap', gap: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
         <div>
           <h1 className="db-page-title">My Videos</h1>
-          <p className="db-page-sub">Manage and download your generated videos.</p>
+          <p className="db-page-sub">
+            Manage and preview your AI-generated videos.
+          </p>
         </div>
+
         <Link href="/dashboard/create">
-          <button className="btn btn-primary">+ Create New Video</button>
+          <button className="btn btn-primary">+ New Video</button>
         </Link>
       </div>
 
-      <div className="db-card">
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: 40 }}>
-            <div className="spinner" style={{ margin: '0 auto', borderColor: 'rgba(47,107,255,0.15)', borderTopColor: 'var(--blue)' }} />
-          </div>
-        ) : videos.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '48px 0' }}>
-            <div style={{ fontSize: 52, marginBottom: 16 }}>🎬</div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', marginBottom: 8 }}>No videos yet</div>
-            <div style={{ fontSize: 14, color: 'var(--text-3)', marginBottom: 24 }}>Create your first AI video to get started</div>
-            <Link href="/dashboard/create">
-              <button className="btn btn-primary">Create Your First Video →</button>
-            </Link>
-          </div>
-        ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Video</th>
-                <th>Type</th>
-                <th>Resolution</th>
-                <th>Status</th>
-                <th>Created</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {videos.map((v, i) => (
-                <tr key={v.id}>
-                  <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 52, height: 36, borderRadius: 7, background: gradients[i % gradients.length], display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>🎬</div>
-                      <span style={{ fontWeight: 700, color: 'var(--text)' }}>{v.title}</span>
-                    </div>
-                  </td>
-                  <td style={{ color: 'var(--text-2)', textTransform: 'capitalize' }}>{v.type?.replace(/_/g, ' ')}</td>
-                  <td style={{ color: 'var(--text-2)' }}>{v.resolution || '—'}</td>
-                  <td><Badge variant={statusVariant[v.status] || 'queued'}>{statusLabel[v.status] || v.status}</Badge></td>
-                  <td style={{ color: 'var(--text-2)' }}>{new Date(v.created_at).toLocaleDateString()}</td>
-                  <td style={{ textAlign: 'right' }}>
-                    <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                      {v.status === 'done' && v.url && (
-                        <a href={v.url} target="_blank" rel="noreferrer">
-                          <button className="btn btn-outline btn-sm">⬇ Download</button>
-                        </a>
+      {loading ? (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+          gap: 20,
+        }}>
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="db-card" style={{ overflow: 'hidden' }}>
+              <div style={{ height: 180, background: '#eee', animation: 'pulse 1.5s infinite' }} />
+              <div style={{ padding: 14 }}>
+                <div style={{ height: 14, background: '#eee', marginBottom: 8 }} />
+                <div style={{ height: 10, width: '60%', background: '#eee' }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : videos.length === 0 ? (
+        <div className="db-card" style={{ textAlign: 'center', padding: 60 }}>
+          <div style={{ fontSize: 50 }}>🎬</div>
+          <h3>No videos yet</h3>
+          <Link href="/dashboard/create">
+            <button className="btn btn-primary">Create Video →</button>
+          </Link>
+        </div>
+      ) : (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+          gap: 20,
+        }}>
+          {videos.map((video) => {
+            const progress = progressMap[video.id] || 0;
+
+            const thumbnail =
+              video.thumbnailUrl ||
+              `https://image.pollinations.ai/prompt/${encodeURIComponent(
+                video.prompt || 'video'
+              )}`;
+
+            const isLoaded = loadedThumbs[video.id];
+
+            return (
+              <div key={video.id} className="db-card" style={{ overflow: 'hidden' }}>
+                
+                <div
+                  style={{
+                    height: 180,
+                    position: 'relative',
+                    cursor: 'pointer',
+                    overflow: 'hidden',
+                  }}
+                  onClick={() => video.url && setModalVideo(video.url)}
+                >
+                  {activeVideoId === video.id && video.url ? (
+                    <video
+                      controls
+                      autoPlay
+                      playsInline
+                      preload="metadata"
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    >
+                      <source src={video.url} type="video/mp4" />
+                    </video>
+                  ) : (
+                    <>
+                      <img
+                        src={thumbnail}
+                        alt="thumbnail"
+                        onLoad={() =>
+                          setLoadedThumbs((prev) => ({
+                            ...prev,
+                            [video.id]: true,
+                          }))
+                        }
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'cover',
+                          filter: isLoaded ? 'blur(0px)' : 'blur(20px)',
+                          transform: isLoaded ? 'scale(1)' : 'scale(1.1)',
+                          transition: '0.4s ease',
+                        }}
+                      />
+
+                      {video.url && (
+                        <div style={{
+                          position: 'absolute',
+                          inset: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          background: 'rgba(0,0,0,0.3)',
+                        }}>
+                          <div style={{
+                            width: 55,
+                            height: 55,
+                            borderRadius: '50%',
+                            background: 'white',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: 22,
+                          }}>
+                            ▶
+                          </div>
+                        </div>
                       )}
-                      <button className="btn btn-danger btn-sm" onClick={() => handleDelete(v.id)}>🗑</button>
+
+                      {(video.status === 'processing' || video.status === 'queued') && (
+                        <div style={{
+                          position: 'absolute',
+                          bottom: 0,
+                          left: 0,
+                          width: '100%',
+                          height: 6,
+                          background: '#ddd',
+                        }}>
+                          <div
+                            style={{
+                              height: '100%',
+                              width: `${progress}%`,
+                              background: '#4f46e5',
+                              transition: 'width 0.5s ease',
+                            }}
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                <div style={{ padding: 14 }}>
+                  <div style={{ fontWeight: 700 }}>
+                    {video.prompt?.slice(0, 40) || 'Untitled Video'}
+                  </div>
+
+                  <div style={{ fontSize: 12, color: '#777', marginBottom: 10 }}>
+                    {video.duration || 10}s · {video.resolution || '1080p'}
+                  </div>
+
+                  {video.status === 'processing' && (
+                    <div style={{ fontSize: 12, color: '#555' }}>
+                      Processing... {progress}%
                     </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+                  )}
+
+                  {video.status === 'failed' && (
+                    <div style={{ fontSize: 12, color: 'red' }}>
+                      Failed
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {video.url && (
+                      <>
+                        <button
+                          className="btn btn-sm"
+                          onClick={() =>
+                            setActiveVideoId(
+                              activeVideoId === video.id ? null : video.id
+                            )
+                          }
+                        >
+                          {activeVideoId === video.id ? '✖ Close' : '▶ Preview'}
+                        </button>
+
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => {
+                            const link = document.createElement('a');
+                            link.href = video.url!;
+                            link.setAttribute('download', `video-${video.id}.mp4`);
+                            link.setAttribute('target', '_blank');
+                            document.body.appendChild(link);
+                            link.click();
+                            link.remove();
+                          }}
+                        >
+                          ⬇ Download
+                        </button>
+                      </>
+                    )}
+
+                    <button
+                      className="btn btn-danger btn-sm"
+                      onClick={() => handleDelete(video.id)}
+                    >
+                      🗑 Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {modalVideo && (
+        <div
+          onClick={() => setModalVideo(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.9)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 999,
+          }}
+        >
+          <video
+            controls
+            autoPlay
+            playsInline
+            preload="metadata"
+            style={{
+              maxWidth: '90%',
+              maxHeight: '90%',
+              borderRadius: 12,
+              background: 'black',
+            }}
+          >
+            <source src={modalVideo} type="video/mp4" />
+          </video>
+        </div>
+      )}
+
+      <style jsx>{`
+        @keyframes pulse {
+          0% { opacity: 1; }
+          50% { opacity: 0.5; }
+          100% { opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }

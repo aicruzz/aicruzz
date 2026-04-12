@@ -3,7 +3,7 @@ import pool from "../db/pool";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { videoQueue } from "../queue";
 import { getSignedVideoUrl } from "../lib/s3Signed";
-import { io } from "../index";
+import { getIO } from "../lib/socket";
 
 // ✅ Helper
 function extractS3Key(url: string): string | null {
@@ -15,11 +15,10 @@ function extractS3Key(url: string): string | null {
   }
 }
 
-// ✅ Helper: sign both video + thumbnail
+// ✅ Helper: sign video + thumbnail
 async function signVideo(video: any) {
   let updated = { ...video };
 
-  // 🎬 VIDEO URL
   if (video.url) {
     const key = extractS3Key(video.url);
     if (key) {
@@ -31,7 +30,6 @@ async function signVideo(video: any) {
     }
   }
 
-  // 🖼 THUMBNAIL URL
   if (video.thumbnailUrl) {
     const key = extractS3Key(video.thumbnailUrl);
     if (key) {
@@ -63,9 +61,7 @@ export async function listVideos(req: AuthRequest, res: Response): Promise<void>
       [req.userId]
     );
 
-    const videos = await Promise.all(
-      result.rows.map((video) => signVideo(video))
-    );
+    const videos = await Promise.all(result.rows.map(signVideo));
 
     res.json({ data: videos });
   } catch (err) {
@@ -74,7 +70,7 @@ export async function listVideos(req: AuthRequest, res: Response): Promise<void>
   }
 }
 
-// GET SINGLE VIDEO
+// GET VIDEO
 export async function getVideo(req: Request, res: Response): Promise<void> {
   const id = Number(req.params.id);
 
@@ -84,10 +80,7 @@ export async function getVideo(req: Request, res: Response): Promise<void> {
   }
 
   try {
-    const result = await pool.query(
-      `SELECT * FROM videos WHERE id = $1`,
-      [id]
-    );
+    const result = await pool.query(`SELECT * FROM videos WHERE id = $1`, [id]);
 
     if (!result.rows.length) {
       res.status(404).json({ error: "Video not found" });
@@ -103,7 +96,7 @@ export async function getVideo(req: Request, res: Response): Promise<void> {
   }
 }
 
-// CREATE VIDEO
+// CREATE VIDEO (QUEUE ENTRY ONLY)
 export async function generateVideo(req: AuthRequest, res: Response): Promise<void> {
   try {
     const { prompt, style, duration, resolution } = req.body;
@@ -127,10 +120,11 @@ export async function generateVideo(req: AuthRequest, res: Response): Promise<vo
 
     const video = result.rows[0];
 
-    // ✅ Emit instantly (UI shows immediately)
+    // ⚡ Send instant update to frontend
+    const io = getIO();
     io.to(String(req.userId)).emit("video:update", video);
 
-    // 🔥🔥🔥 CRITICAL FIX (MATCH WORKER)
+    // 🔥 Add job to queue (worker will call FastAPI GPU)
     await videoQueue.add("video-generation", {
       videoId: video.id,
       prompt,
@@ -179,10 +173,7 @@ export async function getVideoStatus(req: Request, res: Response): Promise<void>
   }
 
   try {
-    const result = await pool.query(
-      `SELECT * FROM videos WHERE id = $1`,
-      [id]
-    );
+    const result = await pool.query(`SELECT * FROM videos WHERE id = $1`, [id]);
 
     if (!result.rows.length) {
       res.status(404).json({ error: "Video not found" });

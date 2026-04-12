@@ -10,21 +10,39 @@ import ffmpegPath from "ffmpeg-static";
 import ffprobePath from "ffprobe-static";
 
 import fs from "fs";
+import axios from "axios";
 import { uploadToS3 } from "./lib/s3";
-import { generateWithProviders } from "./providers/router";
 
 ffmpeg.setFfmpegPath(ffmpegPath as string);
 ffmpeg.setFfprobePath(ffprobePath.path);
 
+// =========================
+// 🗄 DATABASE
+// =========================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
 
+// =========================
+// 🤖 AI ENGINE (FASTAPI)
+// =========================
+const AI_BASE_URL = process.env.AI_BASE_URL;
+
+if (!AI_BASE_URL) {
+  throw new Error("❌ AI_BASE_URL is not set in .env");
+}
+
+// =========================
+// 🔁 REDIS
+// =========================
 const connection = {
   url: process.env.REDIS_URL!,
 };
 
+// =========================
+// 🎬 WORKER
+// =========================
 const worker = new Worker(
   "video-generation",
   async (job) => {
@@ -37,7 +55,7 @@ const worker = new Worker(
 
     try {
       // =========================
-      // 🚀 START PROCESSING
+      // 🚀 START
       // =========================
       await pool.query(
         `UPDATE videos SET status='processing', progress=10 WHERE id=$1`,
@@ -46,28 +64,48 @@ const worker = new Worker(
 
       console.log("🚀 Started processing");
 
-      let videoUrl: string | null = null;
-
       // =========================
-      // 🤖 AI GENERATION
+      // ⚡ CALL FASTAPI GPU
       // =========================
       await pool.query(
         `UPDATE videos SET progress=25 WHERE id=$1`,
         [videoId]
       );
 
+      let videoUrl: string | null = null;
+
       try {
-        console.log("⚡ Running AI providers...");
-        videoUrl = await generateWithProviders(prompt);
+        console.log("⚡ Calling FastAPI GPU...");
+
+        const response = await axios.post(
+          `${AI_BASE_URL}/generate`,
+          {
+            prompt,
+            videoId,
+          },
+          {
+            timeout: 1000 * 60 * 20, // 20 mins
+          }
+        );
+
+        const data = response.data;
+
+        if (!data.success || !data.videoUrl) {
+          throw new Error("Invalid FastAPI response");
+        }
+
+        videoUrl = data.videoUrl;
+
+        console.log("✅ FastAPI video URL:", videoUrl);
       } catch (err) {
-        console.log("❌ AI providers failed:", err);
+        console.error("❌ FastAPI failed:", err);
       }
 
       // =========================
-      // 🟡 FALLBACK (CRITICAL)
+      // 🟡 HARD FALLBACK (ONLY IF NEEDED)
       // =========================
       if (!videoUrl) {
-        console.log("⚡ Using fallback video...");
+        console.log("⚠️ Using fallback video...");
         videoUrl = "https://www.w3schools.com/html/mov_bbb.mp4";
       }
 
@@ -88,7 +126,7 @@ const worker = new Worker(
       console.log("📥 Video downloaded");
 
       // =========================
-      // 🖼 GENERATE THUMBNAIL
+      // 🖼 THUMBNAIL
       // =========================
       await pool.query(
         `UPDATE videos SET progress=65 WHERE id=$1`,
@@ -110,7 +148,7 @@ const worker = new Worker(
       console.log("🖼 Thumbnail created");
 
       // =========================
-      // ☁️ UPLOAD TO S3
+      // ☁️ UPLOAD S3
       // =========================
       await pool.query(
         `UPDATE videos SET progress=85 WHERE id=$1`,
@@ -130,7 +168,7 @@ const worker = new Worker(
       console.log("☁️ Uploaded to S3");
 
       // =========================
-      // ✅ FINAL UPDATE
+      // ✅ DONE
       // =========================
       await pool.query(
         `UPDATE videos 
@@ -161,7 +199,6 @@ const worker = new Worker(
         [videoId]
       );
 
-      // 🧹 CLEANUP ON FAILURE
       if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
       if (fs.existsSync(thumbnailPath)) fs.unlinkSync(thumbnailPath);
     }
@@ -169,6 +206,9 @@ const worker = new Worker(
   { connection }
 );
 
+// =========================
+// 🔔 EVENTS
+// =========================
 worker.on("ready", () => {
   console.log("🟢 Worker ready...");
 });

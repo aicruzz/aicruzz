@@ -12,6 +12,7 @@ import ffprobePath from "ffprobe-static";
 import fs from "fs";
 import axios from "axios";
 import { uploadToS3 } from "./lib/s3";
+import { getIO } from "./lib/socket"; // ✅ IMPORTANT
 
 ffmpeg.setFfmpegPath(ffmpegPath as string);
 ffmpeg.setFfprobePath(ffprobePath.path);
@@ -25,12 +26,12 @@ const pool = new Pool({
 });
 
 // =========================
-// 🤖 AI ENGINE (FASTAPI)
+// 🤖 AI ENGINE
 // =========================
 const AI_BASE_URL = process.env.AI_BASE_URL;
 
 if (!AI_BASE_URL) {
-  throw new Error("❌ AI_BASE_URL is not set in .env");
+  throw new Error("❌ AI_BASE_URL is not set");
 }
 
 // =========================
@@ -41,12 +42,29 @@ const connection = {
 };
 
 // =========================
+// 🔊 EMIT HELPER
+// =========================
+function emitProgress(userId: string, videoId: string, progress: number, status: string) {
+  try {
+    const io = getIO();
+
+    io.to(userId).emit("video-progress", {
+      videoId,
+      progress,
+      status,
+    });
+  } catch (err) {
+    console.log("⚠️ Socket not available (worker context)");
+  }
+}
+
+// =========================
 // 🎬 WORKER
 // =========================
 const worker = new Worker(
   "video-generation",
   async (job) => {
-    const { videoId, prompt } = job.data;
+    const { videoId, prompt, userId } = job.data;
 
     console.log("🎬 Processing video:", videoId);
 
@@ -54,23 +72,21 @@ const worker = new Worker(
     const thumbnailPath = `/tmp/thumb-${videoId}.jpg`;
 
     try {
-      // =========================
       // 🚀 START
-      // =========================
       await pool.query(
         `UPDATE videos SET status='processing', progress=10 WHERE id=$1`,
         [videoId]
       );
 
-      console.log("🚀 Started processing");
+      emitProgress(userId, videoId, 10, "processing");
 
-      // =========================
-      // ⚡ CALL FASTAPI GPU
-      // =========================
+      // ⚡ FASTAPI
       await pool.query(
         `UPDATE videos SET progress=25 WHERE id=$1`,
         [videoId]
       );
+
+      emitProgress(userId, videoId, 25, "processing");
 
       let videoUrl: string | null = null;
 
@@ -79,43 +95,29 @@ const worker = new Worker(
 
         const response = await axios.post(
           `${AI_BASE_URL}/generate`,
-          {
-            prompt,
-            videoId,
-          },
-          {
-            timeout: 1000 * 60 * 20, // 20 mins
-          }
+          { prompt, videoId },
+          { timeout: 1000 * 60 * 20 }
         );
 
-        const data = response.data;
-
-        if (!data.success || !data.videoUrl) {
-          throw new Error("Invalid FastAPI response");
-        }
-
-        videoUrl = data.videoUrl;
+        videoUrl = response.data?.videoUrl;
 
         console.log("✅ FastAPI video URL:", videoUrl);
       } catch (err) {
         console.error("❌ FastAPI failed:", err);
       }
 
-      // =========================
-      // 🟡 HARD FALLBACK (ONLY IF NEEDED)
-      // =========================
       if (!videoUrl) {
         console.log("⚠️ Using fallback video...");
         videoUrl = "https://www.w3schools.com/html/mov_bbb.mp4";
       }
 
-      // =========================
-      // 📥 DOWNLOAD VIDEO
-      // =========================
+      // 📥 DOWNLOAD
       await pool.query(
         `UPDATE videos SET progress=40 WHERE id=$1`,
         [videoId]
       );
+
+      emitProgress(userId, videoId, 40, "processing");
 
       const res = await fetch(videoUrl);
       if (!res.ok) throw new Error("Download failed");
@@ -123,15 +125,13 @@ const worker = new Worker(
       const buffer = Buffer.from(await res.arrayBuffer());
       fs.writeFileSync(videoPath, buffer);
 
-      console.log("📥 Video downloaded");
-
-      // =========================
       // 🖼 THUMBNAIL
-      // =========================
       await pool.query(
         `UPDATE videos SET progress=65 WHERE id=$1`,
         [videoId]
       );
+
+      emitProgress(userId, videoId, 65, "processing");
 
       await new Promise((resolve, reject) => {
         ffmpeg(videoPath)
@@ -145,15 +145,13 @@ const worker = new Worker(
           });
       });
 
-      console.log("🖼 Thumbnail created");
-
-      // =========================
-      // ☁️ UPLOAD S3
-      // =========================
+      // ☁️ UPLOAD
       await pool.query(
         `UPDATE videos SET progress=85 WHERE id=$1`,
         [videoId]
       );
+
+      emitProgress(userId, videoId, 85, "processing");
 
       const videoKey = `videos/video-${videoId}.mp4`;
       const thumbKey = `thumbnails/thumb-${videoId}.jpg`;
@@ -165,11 +163,7 @@ const worker = new Worker(
         throw new Error("Upload failed");
       }
 
-      console.log("☁️ Uploaded to S3");
-
-      // =========================
       // ✅ DONE
-      // =========================
       await pool.query(
         `UPDATE videos 
          SET status='done',
@@ -180,11 +174,11 @@ const worker = new Worker(
         [videoS3Url, thumbnailS3Url, videoId]
       );
 
+      emitProgress(userId, videoId, 100, "done");
+
       console.log("✅ DONE:", videoId);
 
-      // =========================
       // 🧹 CLEANUP
-      // =========================
       if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
       if (fs.existsSync(thumbnailPath)) fs.unlinkSync(thumbnailPath);
 
@@ -198,6 +192,8 @@ const worker = new Worker(
          WHERE id=$1`,
         [videoId]
       );
+
+      emitProgress(userId, videoId, 0, "failed");
 
       if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
       if (fs.existsSync(thumbnailPath)) fs.unlinkSync(thumbnailPath);

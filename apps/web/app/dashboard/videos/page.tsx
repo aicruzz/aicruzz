@@ -20,6 +20,13 @@ export default function VideosPage() {
       try {
         const res = await videosApi.list();
         setVideos(res.data);
+
+        // initialize progress
+        const progressInit: Record<string, number> = {};
+        res.data.forEach((v: Video) => {
+          progressInit[v.id] = (v as any).progress || 0;
+        });
+        setProgressMap(progressInit);
       } catch (err) {
         console.error(err);
       } finally {
@@ -30,38 +37,35 @@ export default function VideosPage() {
     fetchVideos();
   }, []);
 
-  // ✅ SOCKET FIX (REAL SOLUTION)
+  // ✅ SOCKET (REALTIME UPDATES)
   useEffect(() => {
     socket.on('video:update', (updatedVideo: Video) => {
       setVideos((prev) => {
         const exists = prev.find((v) => v.id === updatedVideo.id);
 
-        // ✅ UPDATE EXISTING VIDEO
         if (exists) {
           return prev.map((v) =>
             v.id === updatedVideo.id
               ? {
                   ...v,
                   ...updatedVideo,
-                  // 🔥 FORCE RE-RENDER WHEN URL ARRIVES
                   url: updatedVideo.url ?? v.url,
-                  thumbnailUrl:
-                    updatedVideo.thumbnailUrl ?? v.thumbnailUrl,
+                  thumbnailUrl: updatedVideo.thumbnailUrl ?? v.thumbnailUrl,
                 }
               : v
           );
         }
 
-        // ✅ ADD NEW VIDEO (NO BLANK BREAK)
-        return [
-          {
-            ...updatedVideo,
-            url: updatedVideo.url ?? null,
-            thumbnailUrl: updatedVideo.thumbnailUrl ?? null,
-          },
-          ...prev,
-        ];
+        return [updatedVideo, ...prev];
       });
+
+      // update progress if included
+      if ((updatedVideo as any).progress !== undefined) {
+        setProgressMap((prev) => ({
+          ...prev,
+          [updatedVideo.id]: (updatedVideo as any).progress,
+        }));
+      }
     });
 
     socket.on('video:progress', ({ videoId, progress }) => {
@@ -75,6 +79,28 @@ export default function VideosPage() {
       socket.off('video:update');
       socket.off('video:progress');
     };
+  }, []);
+
+  // ✅ POLLING (fallback for reliability)
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await videosApi.list();
+
+        setVideos(res.data);
+
+        const progressUpdate: Record<string, number> = {};
+        res.data.forEach((v: Video) => {
+          progressUpdate[v.id] = (v as any).progress || 0;
+        });
+
+        setProgressMap(progressUpdate);
+      } catch (err) {
+        console.error('Polling error', err);
+      }
+    }, 3000); // every 3 seconds
+
+    return () => clearInterval(interval);
   }, []);
 
   async function handleDelete(id: string) {

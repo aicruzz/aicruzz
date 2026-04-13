@@ -15,8 +15,11 @@ router.use(authMiddleware);
 
 router.get('/', listVideos);
 router.post('/generate', generateVideo);
-router.get('/:id', getVideo);
+
+// ✅ FIX: put status BEFORE :id
 router.get('/:id/status', getVideoStatus);
+router.get('/:id', getVideo);
+
 router.delete('/:id', deleteVideo);
 
 export default router;

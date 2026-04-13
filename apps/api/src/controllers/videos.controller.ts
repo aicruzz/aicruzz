@@ -44,6 +44,21 @@ async function signVideo(video: any) {
   return updated;
 }
 
+// ✅ NEW: Emit progress to frontend
+function emitProgress(userId: string, video: any) {
+  try {
+    const io = getIO();
+
+    io.to(String(userId)).emit("video-progress", {
+      videoId: video.id,
+      progress: video.progress,
+      status: video.status,
+    });
+  } catch (err) {
+    console.log("⚠️ Socket emit failed");
+  }
+}
+
 // GET VIDEOS
 export async function listVideos(req: AuthRequest, res: Response): Promise<void> {
   try {
@@ -54,7 +69,7 @@ export async function listVideos(req: AuthRequest, res: Response): Promise<void>
 
     const result = await pool.query(
       `SELECT id, user_id, prompt, style, duration, resolution,
-              status, url, "thumbnailUrl", created_at
+              status, progress, url, "thumbnailUrl", created_at
        FROM videos
        WHERE user_id = $1
        ORDER BY created_at DESC`,
@@ -112,8 +127,8 @@ export async function generateVideo(req: AuthRequest, res: Response): Promise<vo
     }
 
     const result = await pool.query(
-      `INSERT INTO videos (prompt, status, user_id, style, duration, resolution)
-       VALUES ($1, 'queued', $2, $3, $4, $5)
+      `INSERT INTO videos (prompt, status, user_id, style, duration, resolution, progress)
+       VALUES ($1, 'queued', $2, $3, $4, $5, 0)
        RETURNING *`,
       [prompt, req.userId, style || null, duration || null, resolution || null]
     );
@@ -124,7 +139,7 @@ export async function generateVideo(req: AuthRequest, res: Response): Promise<vo
     const io = getIO();
     io.to(String(req.userId)).emit("video:update", video);
 
-    // 🔥 Add job to queue (worker will call FastAPI GPU)
+    // 🔥 Add job to queue
     await videoQueue.add("video-generation", {
       videoId: video.id,
       prompt,
@@ -163,7 +178,7 @@ export async function deleteVideo(req: AuthRequest, res: Response): Promise<void
   }
 }
 
-// STATUS
+// STATUS (🔥 KEY FIX HERE)
 export async function getVideoStatus(req: Request, res: Response): Promise<void> {
   const id = Number(req.params.id);
 
@@ -181,6 +196,9 @@ export async function getVideoStatus(req: Request, res: Response): Promise<void>
     }
 
     const video = await signVideo(result.rows[0]);
+
+    // ✅ EMIT PROGRESS EVERY TIME STATUS IS FETCHED
+    emitProgress(video.user_id, video);
 
     res.json(video);
   } catch (err) {

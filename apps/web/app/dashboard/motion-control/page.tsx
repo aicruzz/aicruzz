@@ -24,9 +24,7 @@ export default function MotionControl() {
     startCamera();
     connectSocket();
 
-    return () => {
-      cleanup();
-    };
+    return () => cleanup();
   }, []);
 
   const cleanup = () => {
@@ -49,11 +47,7 @@ export default function MotionControl() {
 
         videoRef.current.onloadedmetadata = () => {
           setCameraReady(true);
-          console.log(
-            '✅ Camera ready:',
-            videoRef.current?.videoWidth,
-            videoRef.current?.videoHeight
-          );
+          console.log('✅ Camera ready');
         };
       }
     } catch (err) {
@@ -67,65 +61,65 @@ export default function MotionControl() {
   const connectSocket = () => {
     setSocketState('connecting');
 
-    try {
-      const ws = new WebSocket('ws://32.192.133.173:4001');
-      socketRef.current = ws;
+    const ws = new WebSocket('ws://32.192.133.173:4001');
+    socketRef.current = ws;
 
-      ws.onopen = () => {
-        setConnected(true);
-        setSocketState('open');
-        console.log('✅ WS connected');
-      };
+    ws.onopen = () => {
+      setConnected(true);
+      setSocketState('open');
+      console.log('✅ WS connected');
 
-      ws.onclose = (e) => {
-        setConnected(false);
-        setSocketState(`closed (${e.code})`);
-        setLastError(`WebSocket closed: ${e.code}`);
+      // 🔥 SEND AVATAR IMMEDIATELY WHEN CONNECTED
+      if (avatar) {
+        ws.send(JSON.stringify({
+          type: 'avatar',
+          image: avatar,
+        }));
+      }
+    };
 
-        console.log('❌ WS closed');
+    ws.onclose = (e) => {
+      setConnected(false);
+      setSocketState(`closed (${e.code})`);
+      setLastError(`WebSocket closed: ${e.code}`);
+      console.log('❌ WS closed');
 
-        // auto-reconnect
-        setTimeout(connectSocket, 2000);
-      };
+      setTimeout(connectSocket, 2000);
+    };
 
-      ws.onerror = () => {
-        setSocketState('error');
-        setLastError('WebSocket connection error');
-      };
+    ws.onerror = () => {
+      setSocketState('error');
+      setLastError('WebSocket connection error');
+    };
 
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
 
-          if (!data.frame) {
-            setLastError('No frame received from server');
-            return;
-          }
+        if (data.type !== 'result') return;
+        if (!data.frame) return;
 
-          const img = new Image();
-          img.src = `data:image/jpeg;base64,${data.frame}`;
+        const img = new Image();
+        img.src = `data:image/jpeg;base64,${data.frame}`;
 
-          img.onload = () => {
-            const canvas = canvasRef.current;
-            const ctx = canvas?.getContext('2d');
-            if (!ctx || !canvas) return;
+        img.onload = () => {
+          const canvas = canvasRef.current;
+          const ctx = canvas?.getContext('2d');
+          if (!ctx || !canvas) return;
 
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-            setFramesReceived((c) => c + 1);
-          };
-        } catch (err) {
-          setLastError(`Parse error: ${err}`);
-        }
-      };
-    } catch (err) {
-      setLastError(`Socket init failed: ${err}`);
-    }
+          setFramesReceived((c) => c + 1);
+        };
+      } catch (err) {
+        setLastError(`Parse error: ${err}`);
+      }
+    };
   };
 
   // ----------------------------
-  // FRAME CAPTURE
+  // SEND FRAME
   // ----------------------------
   const captureFrame = (video: HTMLVideoElement) => {
     const canvas = document.createElement('canvas');
@@ -137,13 +131,9 @@ export default function MotionControl() {
 
     ctx.drawImage(video, 0, 0, 256, 256);
 
-    // compression (IMPORTANT for lag control)
     return canvas.toDataURL('image/jpeg', 0.6);
   };
 
-  // ----------------------------
-  // SEND LOOP
-  // ----------------------------
   const sendFrames = () => {
     const ws = socketRef.current;
 
@@ -151,14 +141,12 @@ export default function MotionControl() {
     if (!videoRef.current || !avatar) return;
     if (!cameraReady) return;
 
-    const driving = captureFrame(videoRef.current);
+    const frame = captureFrame(videoRef.current);
 
-    ws.send(
-      JSON.stringify({
-        source: avatar,
-        driving,
-      })
-    );
+    ws.send(JSON.stringify({
+      type: 'frame',
+      image: frame,
+    }));
 
     setFrameCount((c) => c + 1);
   };
@@ -168,15 +156,14 @@ export default function MotionControl() {
 
     intervalRef.current = setInterval(() => {
       sendFrames();
-    }, 100); // ~10 FPS
+    }, 100);
   };
 
-  // start loop when ready
   useEffect(() => {
-    if (cameraReady && avatar) {
+    if (cameraReady && avatar && connected) {
       startStream();
     }
-  }, [cameraReady, avatar]);
+  }, [cameraReady, avatar, connected]);
 
   // ----------------------------
   // UPLOAD IMAGE
@@ -191,6 +178,14 @@ export default function MotionControl() {
       const result = reader.result as string;
       setAvatar(result);
       console.log('🖼 Avatar loaded');
+
+      // 🔥 SEND AVATAR TO SERVER
+      if (socketRef.current?.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          type: 'avatar',
+          image: result,
+        }));
+      }
     };
 
     reader.readAsDataURL(file);
@@ -202,7 +197,6 @@ export default function MotionControl() {
   return (
     <div style={{ fontFamily: 'system-ui', maxWidth: 900, margin: '0 auto', padding: 24 }}>
 
-      {/* HEADER */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 20 }}>
         <div style={{
           width: 8,
@@ -218,7 +212,6 @@ export default function MotionControl() {
         </span>
       </div>
 
-      {/* ERROR */}
       {lastError && (
         <div style={{ background: '#ffecec', padding: 10, marginBottom: 10 }}>
           ⚠️ {lastError}
@@ -227,47 +220,35 @@ export default function MotionControl() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 16 }}>
 
-        {/* LEFT */}
         <div>
+          <p>Source Image</p>
 
-          {/* SOURCE IMAGE */}
-          <div style={{ marginBottom: 12 }}>
-            <p>Source Image</p>
-
-            <div style={{
-              width: '100%',
-              aspectRatio: '1',
-              background: '#eee',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              overflow: 'hidden'
-            }}>
-              {avatar ? (
-                <img src={avatar} style={{ width: '100%' }} />
-              ) : (
-                <span>No image</span>
-              )}
-            </div>
-
-            <input type="file" onChange={handleUpload} />
+          <div style={{
+            width: '100%',
+            aspectRatio: '1',
+            background: '#eee',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+            {avatar ? <img src={avatar} style={{ width: '100%' }} /> : <span>No image</span>}
           </div>
 
-          {/* CAMERA */}
-          <div>
-            <p>Camera {cameraReady ? '✓' : '...'}</p>
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              style={{ width: '100%', background: '#111' }}
-            />
-          </div>
+          <input type="file" onChange={handleUpload} />
 
+          <p style={{ marginTop: 10 }}>
+            Camera {cameraReady ? '✓' : '...'}
+          </p>
+
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            style={{ width: '100%', background: '#111' }}
+          />
         </div>
 
-        {/* RIGHT OUTPUT */}
         <div>
           <p>AI Output</p>
 

@@ -11,7 +11,7 @@ export default function MotionControl() {
     outputFrame,
     startCamera,
     startSendingFrames,
-  } = useMotionSocket('ws://YOUR_GATEWAY_IP:8080');
+  } = useMotionSocket('ws://32.192.133.173:4001');
 
   const init = async () => {
     if (!videoRef.current) return;

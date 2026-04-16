@@ -5,13 +5,13 @@ import { useMotionSocket } from '@/hooks/useMotionSocket';
 
 export default function MotionControl() {
   const videoRef = useRef<HTMLVideoElement>(null);
-
+ const wsUrl = 'ws://32.192.133.173:8765';
   const {
     connected,
     outputFrame,
     startCamera,
     startSendingFrames,
-  } = useMotionSocket('ws://32.192.133.173:4001');
+  } = useMotionSocket(wsUrl);
 
   const init = async () => {
     if (!videoRef.current) return;

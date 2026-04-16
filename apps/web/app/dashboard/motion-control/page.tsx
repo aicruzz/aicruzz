@@ -29,7 +29,7 @@ export default function MotionControl() {
 
   // 🔌 CONNECT TO GATEWAY (IMPORTANT)
   const connectSocket = () => {
-    socketRef.current = new WebSocket('ws://32.192.133.173:4001');
+    socketRef.current = new WebSocket('ws://aicruzz.com:4001');
 
     socketRef.current.onopen = () => {
       console.log('✅ Connected to Gateway');

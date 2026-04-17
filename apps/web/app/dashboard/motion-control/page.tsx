@@ -68,14 +68,6 @@ export default function MotionControl() {
       setConnected(true);
       setSocketState('open');
       console.log('✅ WS connected');
-
-      // 🔥 SEND AVATAR IMMEDIATELY WHEN CONNECTED
-      if (avatar) {
-        ws.send(JSON.stringify({
-          type: 'avatar',
-          image: avatar,
-        }));
-      }
     };
 
     ws.onclose = (e) => {
@@ -84,6 +76,7 @@ export default function MotionControl() {
       setLastError(`WebSocket closed: ${e.code}`);
       console.log('❌ WS closed');
 
+      stopStream();
       setTimeout(connectSocket, 2000);
     };
 
@@ -119,7 +112,7 @@ export default function MotionControl() {
   };
 
   // ----------------------------
-  // SEND FRAME
+  // FRAME CAPTURE
   // ----------------------------
   const captureFrame = (video: HTMLVideoElement) => {
     const canvas = document.createElement('canvas');
@@ -134,7 +127,10 @@ export default function MotionControl() {
     return canvas.toDataURL('image/jpeg', 0.6);
   };
 
-  const sendFrames = () => {
+  // ----------------------------
+  // STREAM CONTROL
+  // ----------------------------
+  const sendFrame = () => {
     const ws = socketRef.current;
 
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -143,10 +139,12 @@ export default function MotionControl() {
 
     const frame = captureFrame(videoRef.current);
 
-    ws.send(JSON.stringify({
-      type: 'frame',
-      image: frame,
-    }));
+    ws.send(
+      JSON.stringify({
+        source: avatar,
+        driving: frame, // ✅ FIXED (matches gateway)
+      })
+    );
 
     setFrameCount((c) => c + 1);
   };
@@ -155,10 +153,16 @@ export default function MotionControl() {
     if (intervalRef.current) clearInterval(intervalRef.current);
 
     intervalRef.current = setInterval(() => {
-      sendFrames();
-    }, 100);
+      sendFrame();
+    }, 150); // ✅ safer FPS (prevents overload)
   };
 
+  const stopStream = () => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    intervalRef.current = null;
+  };
+
+  // start stream only when stable
   useEffect(() => {
     if (cameraReady && avatar && connected) {
       startStream();
@@ -179,12 +183,12 @@ export default function MotionControl() {
       setAvatar(result);
       console.log('🖼 Avatar loaded');
 
-      // 🔥 SEND AVATAR TO SERVER
       if (socketRef.current?.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({
-          type: 'avatar',
-          image: result,
-        }));
+        socketRef.current.send(
+          JSON.stringify({
+            source: result,
+          })
+        );
       }
     };
 
@@ -204,9 +208,11 @@ export default function MotionControl() {
           borderRadius: '50%',
           background: connected ? '#22c55e' : '#ef4444',
         }} />
+
         <span style={{ fontSize: 13, color: '#666' }}>
           {connected ? 'Connected' : socketState}
         </span>
+
         <span style={{ marginLeft: 'auto', fontWeight: 600 }}>
           Motion Control
         </span>
